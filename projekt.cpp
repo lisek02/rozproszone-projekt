@@ -9,23 +9,29 @@
 
 using namespace std;
 
-#define S_INITIAL_ELDERS_COUNT 20
-#define N_JUDGE 5
-#define R_RINGS 5
-#define Z_MAX_HEALTH 100
-#define D_DOCTORS 5
+#define N_FOG_MACHINES 2
+#define N_RECORDERS 3
+#define N_SHEETS 4
+#define N_HOUSES 5
 
 #define REQUEST 100
 #define CONFIRMATION 101
 #define EXIT 102
 
-#define SHOW_LOGS
+// #define SHOW_LOGS
+
+enum states {
+    FREE,
+    WAITING_FOR_RESPONSE
+};
 
 struct message {
     int time;
-    int freeDoctors;
     int type;
     int owner;
+    int freeRecorders;
+    int freeFogMachines;
+    int freeSheets;
 
     bool operator<(const message& msg) const
     {
@@ -38,46 +44,34 @@ struct message {
     }
 };
 
-struct elder {
+struct house {
     string id;
-    int health;
+    bool free;
 };
 
-struct official {
-    int id;
-    vector<elder> elders;
-};
-
-struct ring {
-    int id;
-};
+states state;
 
 int tid, size;
-int freeJudges = N_JUDGE;
-int freeDoctors = D_DOCTORS;
+int freeRecorders = N_RECORDERS;
+int freeFogMachines = N_FOG_MACHINES;
+int freeSheets = N_SHEETS;
+
+bool ownRecorder = false;
+bool ownFogMachine = false;
+bool ownSheet = false;
+
 int ownTime = 0;
-bool initialized = false;
 vector <message> queue;
+vector <house> housesQueue;
 MPI_Status status;
-vector<ring> rings;
 
 // BEGIN initializations
-void initOfficial() {
-    official off;
-    off.id = tid;
-    for (int i=0; i<S_INITIAL_ELDERS_COUNT; i++) {
-        elder newElder;
-        newElder.id = to_string(tid) + to_string(i);
-        newElder.health = Z_MAX_HEALTH;
-        off.elders.push_back(newElder);
-    }
-}
-
-void initRings() {
-    for (int i=0; i<R_RINGS; i++) {
-        ring newRing;
-        newRing.id = i;
-        rings.push_back(newRing);
+void initHouses() {
+    for (int i = 0; i < N_HOUSES; i++) {
+        house newHouse;
+        newHouse.id = to_string(tid) + to_string(i);
+        newHouse.free = true;
+        housesQueue.push_back(newHouse);
     }
 }
 // END initializations
@@ -112,6 +106,9 @@ void handleExit(message response) {
             i--;
         }
     }
+    freeRecorders = response.freeRecorders;
+    freeFogMachines = response.freeFogMachines;
+    freeSheets = response.freeSheets;
 }
 // END handle different response types
 
@@ -129,6 +126,7 @@ void sendRequest() {
         MPI_Send(&request, sizeof(message), MPI_BYTE, i, REQUEST, MPI_COMM_WORLD);
     }
     ownTime++;
+    state = WAITING_FOR_RESPONSE;
 }
 
 // Receive request and call proper handler
@@ -156,11 +154,15 @@ void receiveRequest() {
     }
 }
 
+// Exit critical section and inform other processed about devices counts
 void exitCriticalSection() {
     message request;
     request.type = EXIT;
     request.owner = tid;
     request.time = -1;
+    request.freeRecorders = freeRecorders;
+    request.freeFogMachines = freeFogMachines;
+    request.freeSheets = freeSheets;
 
     #ifdef SHOW_LOGS
     cout << tid << " is sending EXIT request to all proccesses\n";
@@ -210,9 +212,39 @@ bool canEnterCriticalSection() {
     return isFirst() && hasAllConfirmations();
 }
 
+void bookDevices() {
+    if (freeFogMachines > 0 && !ownFogMachine) {
+        freeFogMachines--;
+        ownFogMachine = true;
+    }
+    if (freeRecorders > 0 && !ownRecorder) {
+        freeRecorders--;
+        ownRecorder = true;
+    }
+    if (freeSheets > 0 && !ownSheet) {
+        freeSheets--;
+        ownSheet = true;
+    }
+    cout << tid << " bookedDevices, freeFogMachines: " << freeFogMachines << " freeRecorders: " << freeRecorders << " freeSheets: " << freeSheets << "\n";
+}
+
+void returnDevices() {
+    ownFogMachine = false;
+    ownRecorder = false;
+    ownSheet = false;
+    freeFogMachines++;
+    freeRecorders++;
+    freeSheets++;
+    cout << tid << " returnedDevices, freeFogMachines: " << freeFogMachines << " freeRecorders: " << freeRecorders << " freeSheets: " << freeSheets << "\n";
+}
+
+bool ownAllDevices() {
+    return (ownFogMachine && ownRecorder && ownSheet);
+}
+
 void init() {
-    initOfficial();
-    initRings();
+    state = FREE;
+    initHouses();
 }
 
 int main(int argc, char **argv)
@@ -220,18 +252,27 @@ int main(int argc, char **argv)
     MPI_Init(&argc, &argv);
     MPI_Comm_size( MPI_COMM_WORLD, &size );
     MPI_Comm_rank( MPI_COMM_WORLD, &tid );
-    // init();
+    init();
     while(1) {
-        if (initialized == false) {
-            initialized = true;
-            sendRequest();
-        }
         usleep( rand()%5000000 );
+        if (state == FREE) {
+            sendRequest();
+            state = WAITING_FOR_RESPONSE;
+        }
         receiveRequest();
         if (canEnterCriticalSection()) {
             cout << tid << " is entering critical section\n";
+
+            if (!ownAllDevices()) {
+                bookDevices();
+            } else {
+                cout << tid << " has all devices\n";
+                returnDevices();
+            }
+            state = FREE;
             deleteAllConfirmations();
             exitCriticalSection();
+            cout << tid << " is leaving critical section\n";
         }
     }
     MPI_Finalize();
