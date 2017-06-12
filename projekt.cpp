@@ -25,6 +25,11 @@ enum states {
     WAITING_FOR_RESPONSE
 };
 
+struct house {
+    int id;
+    int owner;
+};
+
 struct message {
     int time;
     int type;
@@ -32,6 +37,7 @@ struct message {
     int freeRecorders;
     int freeFogMachines;
     int freeSheets;
+    house housesQueue[N_HOUSES];
 
     bool operator<(const message& msg) const
     {
@@ -44,11 +50,6 @@ struct message {
     }
 };
 
-struct house {
-    string id;
-    bool free;
-};
-
 states state;
 
 int tid, size;
@@ -59,19 +60,20 @@ int freeSheets = N_SHEETS;
 bool ownRecorder = false;
 bool ownFogMachine = false;
 bool ownSheet = false;
+int ownedHouseNumber = -1;
 
 int ownTime = 0;
 vector <message> queue;
-vector <house> housesQueue;
+house housesQueue[N_HOUSES];
 MPI_Status status;
 
 // BEGIN initializations
 void initHouses() {
     for (int i = 0; i < N_HOUSES; i++) {
         house newHouse;
-        newHouse.id = to_string(tid) + to_string(i);
-        newHouse.free = true;
-        housesQueue.push_back(newHouse);
+        newHouse.id = i;
+        newHouse.owner = -1;
+        housesQueue[i] = newHouse;
     }
 }
 // END initializations
@@ -109,6 +111,7 @@ void handleExit(message response) {
     freeRecorders = response.freeRecorders;
     freeFogMachines = response.freeFogMachines;
     freeSheets = response.freeSheets;
+    for (int i = 0; i < N_HOUSES; i++) housesQueue[i] = response.housesQueue[i];
 }
 // END handle different response types
 
@@ -163,6 +166,7 @@ void exitCriticalSection() {
     request.freeRecorders = freeRecorders;
     request.freeFogMachines = freeFogMachines;
     request.freeSheets = freeSheets;
+    for (int i = 0; i < N_HOUSES; i++) request.housesQueue[i] = housesQueue[i];
 
     #ifdef SHOW_LOGS
     cout << tid << " is sending EXIT request to all proccesses\n";
@@ -213,19 +217,23 @@ bool canEnterCriticalSection() {
 }
 
 void bookDevices() {
+    cout << tid << " booked: ";
     if (freeFogMachines > 0 && !ownFogMachine) {
         freeFogMachines--;
         ownFogMachine = true;
+        cout << "fog machine, ";
     }
     if (freeRecorders > 0 && !ownRecorder) {
         freeRecorders--;
         ownRecorder = true;
+        cout << "recorder, ";
     }
     if (freeSheets > 0 && !ownSheet) {
         freeSheets--;
         ownSheet = true;
+        cout << "sheet, ";
     }
-    cout << tid << " bookedDevices, freeFogMachines: " << freeFogMachines << " freeRecorders: " << freeRecorders << " freeSheets: " << freeSheets << "\n";
+    cout << "freeFogMachines: " << freeFogMachines << ", freeRecorders: " << freeRecorders << ", freeSheets: " << freeSheets << "\n";
 }
 
 void returnDevices() {
@@ -240,6 +248,35 @@ void returnDevices() {
 
 bool ownAllDevices() {
     return (ownFogMachine && ownRecorder && ownSheet);
+}
+
+void bookHouse() {
+    bool foundHouse = false;
+    for (int i = 0; i < N_HOUSES; i++) {
+        if (housesQueue[i].owner < 0) {
+            housesQueue[i].owner = tid;
+            ownedHouseNumber = i;
+            foundHouse = true;
+            cout << tid << " booking house number " << housesQueue[i].id << ". Hounting house!\n";
+            break;
+        }
+    }
+    if (!foundHouse) cout << tid << " didn't find free house\n";
+}
+
+void freeHouse() {
+    for (int i = 0; i < N_HOUSES; i++) {
+        if (housesQueue[i].owner == tid) {
+            cout << tid << " leaving house number " << housesQueue[i].id << "\n";
+            housesQueue[i].owner = -1;
+            ownedHouseNumber = -1;
+            break;
+        }
+    }
+}
+
+bool hasReservedHouse() {
+    return ownedHouseNumber >= 0;
 }
 
 void init() {
@@ -265,8 +302,11 @@ int main(int argc, char **argv)
 
             if (!ownAllDevices()) {
                 bookDevices();
+            } else if (!hasReservedHouse()) {
+                cout << tid << " has all devices, trying to book house\n";
+                bookHouse();
             } else {
-                cout << tid << " has all devices\n";
+                freeHouse();
                 returnDevices();
             }
             state = FREE;
