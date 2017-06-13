@@ -28,6 +28,8 @@ enum states {
 struct house {
     int id;
     int owner;
+    int timeout;
+    double timestamp;
 };
 
 struct message {
@@ -73,6 +75,8 @@ void initHouses() {
         house newHouse;
         newHouse.id = i;
         newHouse.owner = -1;
+        newHouse.timeout = 0;
+        newHouse.timestamp = MPI_Wtime();
         housesQueue[i] = newHouse;
     }
 }
@@ -111,7 +115,13 @@ void handleExit(message response) {
     freeRecorders = response.freeRecorders;
     freeFogMachines = response.freeFogMachines;
     freeSheets = response.freeSheets;
-    for (int i = 0; i < N_HOUSES; i++) housesQueue[i] = response.housesQueue[i];
+    for (int i = 0; i < N_HOUSES; i++) {
+        housesQueue[i] = response.housesQueue[i];
+        if (housesQueue[i].timeout > 0) {
+            housesQueue[i].timestamp = MPI_Wtime() + housesQueue[i].timeout;
+            housesQueue[i].timeout = 0;
+        }
+    }
 }
 // END handle different response types
 
@@ -250,25 +260,34 @@ bool ownAllDevices() {
     return (ownFogMachine && ownRecorder && ownSheet);
 }
 
-void bookHouse() {
+bool bookHouse() {
     bool foundHouse = false;
+    cout << tid << " ";
     for (int i = 0; i < N_HOUSES; i++) {
-        if (housesQueue[i].owner < 0) {
+        cout << "[" << housesQueue[i].timestamp << "] ";
+    }
+    for (int i = 0; i < N_HOUSES; i++) {
+        double currTime = MPI_Wtime();
+        cout << " currTime: " << currTime;
+        if (housesQueue[i].owner < 0 && currTime > housesQueue[i].timestamp) {
             housesQueue[i].owner = tid;
             ownedHouseNumber = i;
             foundHouse = true;
-            cout << tid << " booking house number " << housesQueue[i].id << ". Hounting house!\n";
+            cout << tid << ". Booking house number " << housesQueue[i].id << ". Hounting house!\n";
             break;
         }
     }
     if (!foundHouse) cout << tid << " didn't find free house\n";
+    return foundHouse;
 }
 
 void freeHouse() {
+    int timeout = (rand() % 15) + 10;
     for (int i = 0; i < N_HOUSES; i++) {
         if (housesQueue[i].owner == tid) {
             cout << tid << " leaving house number " << housesQueue[i].id << "\n";
             housesQueue[i].owner = -1;
+            housesQueue[i].timeout = timeout;
             ownedHouseNumber = -1;
             break;
         }
@@ -291,7 +310,7 @@ int main(int argc, char **argv)
     MPI_Comm_rank( MPI_COMM_WORLD, &tid );
     init();
     while(1) {
-        usleep( rand()%5000000 );
+        usleep( rand()%500000 );
         if (state == FREE) {
             sendRequest();
             state = WAITING_FOR_RESPONSE;
@@ -304,15 +323,16 @@ int main(int argc, char **argv)
                 bookDevices();
             } else if (!hasReservedHouse()) {
                 cout << tid << " has all devices, trying to book house\n";
-                bookHouse();
-            } else {
-                freeHouse();
-                returnDevices();
+                bool success = bookHouse();
+                if (success) {
+                    freeHouse();
+                    returnDevices();
+                }
             }
             state = FREE;
             deleteAllConfirmations();
             exitCriticalSection();
-            cout << tid << " is leaving critical section\n";
+            cout << tid << " is leaving critical section\n\n";
         }
     }
     MPI_Finalize();
