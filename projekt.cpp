@@ -164,7 +164,6 @@ void handleReturnDevicesConfirmation(message response) {
     sort(devicesQueue.begin(), devicesQueue.end());
 }
 
-
 void handleExit(message response) {
     if (response.type == DEVICES_EXIT) {
         freeRecorders = response.freeRecorders;
@@ -194,6 +193,7 @@ void handleExit(message response) {
 }
 // END handle different response types
 
+// Send request for devices or house or return devices
 void sendRequest(int type) {
     message request;
     request.time = (type == NEED_HOUSE ? housesTime : devicesTime);
@@ -377,6 +377,7 @@ void bookDevices() {
     cout << "freeFogMachines: " << freeFogMachines << ", freeRecorders: " << freeRecorders << ", freeSheets: " << freeSheets << "\n";
 }
 
+// Return all devices
 void returnDevices() {
     ownFogMachine = false;
     ownRecorder = false;
@@ -387,10 +388,12 @@ void returnDevices() {
     cout << tid << " returnedDevices, freeFogMachines: " << freeFogMachines << " freeRecorders: " << freeRecorders << " freeSheets: " << freeSheets << "\n";
 }
 
+// Check if process owns all devices
 bool ownAllDevices() {
     return (ownFogMachine && ownRecorder && ownSheet);
 }
 
+// Book first available house with timestamp < current time
 bool bookHouse() {
     bool foundHouse = false;
     cout << tid << " ";
@@ -412,6 +415,7 @@ bool bookHouse() {
     return foundHouse;
 }
 
+// Free house and set timeout on it
 void freeHouse() {
     int timeout = (rand() % 5) + 5;
     for (int i = 0; i < N_HOUSES; i++) {
@@ -423,10 +427,6 @@ void freeHouse() {
             break;
         }
     }
-}
-
-bool hasReservedHouse() {
-    return ownedHouseNumber >= 0;
 }
 
 void init() {
